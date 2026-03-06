@@ -1,0 +1,69 @@
+name: ML Pipeline
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  train-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: eu-north-1
+
+      - name: Pull data from S3 using DVC
+        run: |
+          dvc pull
+
+      - name: Train model
+        run: |
+          python src/train.py
+
+      - name: Show metrics
+        run: |
+          cat metrics/metrics.json
+
+      - name: Upload metrics as artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: metrics
+          path: metrics/metrics.json
+
+      - name: Add summary
+        run: |
+          echo "## 2022BCS0222 - Model Metrics" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| RMSE | $(cat metrics/metrics.json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["rmse"])')" >> $GITHUB_STEP_SUMMARY
+          echo "| R2 | $(cat metrics/metrics.json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["r2"])')" >> $GITHUB_STEP_SUMMARY
+          echo "| Dataset Size | $(cat metrics/metrics.json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["dataset_size"])')" >> $GITHUB_STEP_SUMMARY
+          echo "| Training Samples | $(cat metrics/metrics.json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["training_samples"])')" >> $GITHUB_STEP_SUMMARY
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and Push Docker image
+        run: |
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/lab8-dvc:latest .
+          docker push ${{ secrets.DOCKER_USERNAME }}/lab8-dvc:latest
